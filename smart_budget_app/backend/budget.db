@@ -1,0 +1,695 @@
+import React, { useState, useEffect } from 'react';
+import { PlusCircle, TrendingUp, AlertTriangle, DollarSign, Calendar, Target, Users, UserPlus, Split, Bell, BookOpen, ExternalLink, PieChart } from 'lucide-react';
+import { PieChart as RechartsPieChart, Cell, ResponsiveContainer, Legend, Tooltip, Pie } from 'recharts';
+
+const BudgetApp = () => {
+    // --- API Configuration ---
+    const FASTAPI_URL = "http://localhost:8000";
+    const FASTAPI_PREDICT_URL = `${FASTAPI_URL}/predict_budget`;
+    const FASTAPI_SAVE_URL = `${FASTAPI_URL}/save_data`;
+
+    // --- 1. STATE MANAGEMENT ---
+    const [budget, setBudget] = useState(2000);
+    const [friends, setFriends] = useState([
+        { id: 1, name: 'Alice', email: 'alice@email.com' },
+        { id: 2, name: 'Bob', email: 'bob@email.com' },
+        { id: 3, name: 'Charlie', email: 'charlie@email.com' }
+    ]);
+    
+    // NOTE: In a real app, 'date' should be stored as an ISO string immediately
+    const [expenses, setExpenses] = useState([
+        { id: 1, amount: 45.50, description: 'Groceries', date: new Date('2025-09-01'), category: 'Food', splitWith: [], yourShare: 45.50 },
+        { id: 2, amount: 120.00, description: 'Gas Bill', date: new Date('2025-09-03'), category: 'Utilities', splitWith: [], yourShare: 120.00 },
+        { id: 3, amount: 80.00, description: 'Restaurant', date: new Date('2025-09-05'), category: 'Food', splitWith: [1, 2], yourShare: 26.67 },
+        { id: 4, amount: 200.00, description: 'Shopping', date: new Date('2025-09-07'), category: 'Shopping', splitWith: [], yourShare: 200.00 },
+        { id: 5, amount: 150.00, description: 'Car Repair', date: new Date('2025-09-10'), category: 'Transportation', splitWith: [], yourShare: 150.00 },
+        { id: 6, amount: 90.00, description: 'Movie Night', date: new Date('2025-09-12'), category: 'Entertainment', splitWith: [1, 3], yourShare: 30.00 },
+    ]);
+    
+    const [newExpense, setNewExpense] = useState({
+        amount: '', description: '', category: 'Food', splitWith: []
+    });
+
+    const [newFriend, setNewFriend] = useState({ name: '', email: '' });
+    const [activeTab, setActiveTab] = useState('dashboard');
+    const [loadingPrediction, setLoadingPrediction] = useState(false);
+
+    // STATE to hold the prediction result from FastAPI
+    const [apiPredictionStatus, setApiPredictionStatus] = useState({
+        type: 'loading',
+        message: '⏳ Initializing...',
+        details: 'Connecting to Python backend...',
+        willExceedBy20th: false,
+        spendingBy20th: 0
+    });
+    
+    // --- 2. LOCAL CALCULATIONS (for charts/cards) ---
+    const categories = ['Food', 'Utilities', 'Shopping', 'Transportation', 'Entertainment', 'Healthcare', 'Other'];
+    const CHART_COLORS = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899', '#6B7280'];
+
+    const currentDate = new Date();
+    const currentMonth = currentDate.getMonth();
+    const currentYear = currentDate.getFullYear();
+    const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+    const dayOfMonth = currentDate.getDate();
+
+    const currentMonthExpenses = expenses.filter(expense => {
+        const expenseDate = expense.date instanceof Date ? expense.date : new Date(expense.date);
+        return expenseDate.getMonth() === currentMonth && expenseDate.getFullYear() === currentYear;
+    });
+
+    const totalSpent = currentMonthExpenses.reduce((sum, expense) => sum + expense.yourShare, 0);
+    const totalPaidOut = currentMonthExpenses.reduce((sum, expense) => sum + expense.amount, 0);
+    const remainingBudget = budget - totalSpent;
+    
+    const dailyAverageSpending = totalSpent / dayOfMonth;
+
+    // --- 3. API Communication and Effects ---
+
+    const fetchPrediction = async () => {
+        setLoadingPrediction(true);
+        setApiPredictionStatus(prev => ({ ...prev, message: '...Updating prediction...', type: 'loading' }));
+
+        // Prepare data: convert Date objects to ISO string for Pydantic
+        const apiExpenses = expenses.map(e => ({
+            ...e,
+            date: e.date instanceof Date ? e.date.toISOString() : new Date(e.date).toISOString(),
+        }));
+
+        const payload = {
+            budget: parseFloat(budget),
+            expenses: apiExpenses,
+        };
+
+        try {
+            const response = await fetch(FASTAPI_PREDICT_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+
+            if (!response.ok) {
+                // Handle non-200 responses (e.g., FastAPI validation errors)
+                const errorData = await response.json();
+                throw new Error(errorData.detail || `HTTP error! Status: ${response.status}`);
+            }
+
+            const data = await response.json();
+            setApiPredictionStatus(data); 
+
+        } catch (error) {
+            console.error("FastAPI Prediction Error:", error);
+            setApiPredictionStatus({
+                type: 'error',
+                message: '❌ Error connecting to backend!',
+                details: `Could not fetch prediction. Is the FastAPI server running at ${FASTAPI_URL}:8000? Details: ${error.message}`,
+                willExceedBy20th: false,
+                spendingBy20th: dailyAverageSpending * 20 || 0,
+            });
+        } finally {
+            setLoadingPrediction(false);
+        }
+    };
+
+    const saveBudgetToDB = async () => {
+        const apiExpenses = expenses.map(e => ({
+            ...e,
+            date: e.date instanceof Date ? e.date.toISOString() : new Date(e.date).toISOString(),
+        }));
+
+        const payload = {
+            budget: parseFloat(budget),
+            expenses: apiExpenses,
+        };
+
+        try {
+            const response = await fetch(FASTAPI_SAVE_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                alert(result.message);
+            } else {
+                alert(`Save failed: ${result.detail || 'Unknown error'}`);
+            }
+
+        } catch (error) {
+            console.error("Save to DB Error:", error);
+            alert("Failed to connect to FastAPI backend for saving.");
+        }
+    };
+
+    // Effect to run the prediction whenever budget or expenses change
+    useEffect(() => {
+        fetchPrediction();
+    }, [budget, expenses]);
+
+
+    // --- 4. UTILITY FUNCTIONS (Modified slightly for date handling) ---
+
+    const calculateSplit = (amount, splitFriends) => {
+        const totalPeople = splitFriends.length + 1;
+        return amount / totalPeople;
+    };
+
+    const addExpense = () => {
+        if (newExpense.amount && newExpense.description) {
+            const amount = parseFloat(newExpense.amount);
+            const yourShare = calculateSplit(amount, newExpense.splitWith);
+            
+            const expense = {
+                id: Date.now(),
+                amount: amount,
+                description: newExpense.description,
+                date: new Date(), // Storing as Date object, converted to ISO string for API
+                category: newExpense.category,
+                splitWith: [...newExpense.splitWith],
+                yourShare: yourShare
+            };
+            setExpenses([...expenses, expense]);
+            setNewExpense({ amount: '', description: '', category: 'Food', splitWith: [] });
+        }
+    };
+
+    // ... (addFriend, toggleFriendSplit, deleteExpense, getFriendName are unchanged) ...
+    const addFriend = () => {
+        if (newFriend.name && newFriend.email) {
+            const friend = {
+                id: Date.now(),
+                name: newFriend.name,
+                email: newFriend.email
+            };
+            setFriends([...friends, friend]);
+            setNewFriend({ name: '', email: '' });
+        }
+    };
+
+    const toggleFriendSplit = (friendId) => {
+        const updatedSplitWith = newExpense.splitWith.includes(friendId)
+            ? newExpense.splitWith.filter(id => id !== friendId)
+            : [...newExpense.splitWith, friendId];
+        
+        setNewExpense({...newExpense, splitWith: updatedSplitWith});
+    };
+
+    const deleteExpense = (id) => {
+        setExpenses(expenses.filter(expense => expense.id !== id));
+    };
+
+    const getFriendName = (friendId) => {
+        const friend = friends.find(f => f.id === friendId);
+        return friend ? friend.name : 'Unknown';
+    };
+
+    const getExpensesByCategory = () => {
+        const categoryTotals = {};
+        categories.forEach(category => {
+            categoryTotals[category] = 0;
+        });
+        
+        currentMonthExpenses.forEach(expense => {
+            categoryTotals[expense.category] += expense.yourShare;
+        });
+        
+        return categories.map((category, index) => ({
+            name: category,
+            value: categoryTotals[category],
+            color: CHART_COLORS[index % CHART_COLORS.length]
+        })).filter(item => item.value > 0);
+    };
+
+    const getSpendingAnalysis = () => {
+        const totalSpent = currentMonthExpenses.reduce((sum, expense) => sum + expense.yourShare, 0);
+        const remaining = Math.max(0, budget - totalSpent);
+        
+        return [
+            { name: 'Spent', value: totalSpent, color: '#EF4444' },
+            { name: 'Remaining', value: remaining, color: '#10B981' }
+        ];
+    };
+
+    const expensesByCategory = getExpensesByCategory();
+    const spendingAnalysis = getSpendingAnalysis();
+
+    // Map the API prediction data to local variables for cleaner rendering
+    const { 
+        type: predictionType, 
+        message: predictionMessage, 
+        details: predictionDetails,
+        willExceedBy20th,
+        spendingBy20th 
+    } = apiPredictionStatus;
+
+
+    // --- 5. RENDER (Using API Data) ---
+
+    return (
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+            <div className="max-w-6xl mx-auto space-y-6">
+                
+                {/* Header and Tabs (UNCHANGED) */}
+                <div className="text-center py-6">
+                    <h1 className="text-4xl font-bold text-gray-800 mb-2">Smart Budget Tracker</h1>
+                    <p className="text-gray-600">Track expenses, split with friends, and get predictive insights</p>
+                </div>
+
+                <div className="bg-white rounded-xl shadow-lg p-2">
+                    <div className="flex space-x-2">
+                        {['dashboard', 'expenses', 'friends', 'insights'].map((tab) => (
+                            <button
+                                key={tab}
+                                onClick={() => setActiveTab(tab)}
+                                className={`px-6 py-3 rounded-lg font-medium transition-colors capitalize ${
+                                    activeTab === tab 
+                                        ? 'bg-blue-600 text-white' 
+                                        : 'text-gray-600 hover:bg-blue-50'
+                                }`}
+                            >
+                                {tab === 'dashboard' && <Target className="inline h-4 w-4 mr-2" />}
+                                {tab === 'expenses' && <DollarSign className="inline h-4 w-4 mr-2" />}
+                                {tab === 'friends' && <Users className="inline h-4 w-4 mr-2" />}
+                                {tab === 'insights' && <BookOpen className="inline h-4 w-4 mr-2" />}
+                                {tab}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Dashboard Tab */}
+                {activeTab === 'dashboard' && (
+                    <>
+                        {/* Enhanced Dashboard Cards */}
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <div className="bg-white rounded-xl shadow-lg p-6">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-sm font-medium text-gray-600">Monthly Budget</p>
+                                        <p className="text-2xl font-bold text-blue-600">${budget.toFixed(2)}</p>
+                                    </div>
+                                    <Target className="h-8 w-8 text-blue-600" />
+                                </div>
+                            </div>
+
+                            <div className="bg-white rounded-xl shadow-lg p-6">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-sm font-medium text-gray-600">Your Share Spent</p>
+                                        <p className="text-2xl font-bold text-red-600">${totalSpent.toFixed(2)}</p>
+                                    </div>
+                                    <DollarSign className="h-8 w-8 text-red-600" />
+                                </div>
+                            </div>
+
+                            <div className="bg-white rounded-xl shadow-lg p-6">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-sm font-medium text-gray-600">Total Paid Out</p>
+                                        <p className="text-2xl font-bold text-purple-600">${totalPaidOut.toFixed(2)}</p>
+                                    </div>
+                                    <Split className="h-8 w-8 text-purple-600" />
+                                </div>
+                            </div>
+
+                            <div className="bg-white rounded-xl shadow-lg p-6">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-sm font-medium text-gray-600">Remaining Budget</p>
+                                        <p className={`text-2xl font-bold ${remainingBudget >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                            ${remainingBudget.toFixed(2)}
+                                        </p>
+                                    </div>
+                                    <Calendar className="h-8 w-8 text-green-600" />
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* **API-Driven Prediction Alert** */}
+                        <div className={`rounded-xl shadow-lg p-6 ${
+                            predictionType === 'critical' ? 'bg-red-100 border-l-4 border-red-600' :
+                            predictionType === 'success' ? 'bg-green-50 border-l-4 border-green-500' :
+                            predictionType === 'warning' ? 'bg-yellow-50 border-l-4 border-yellow-500' :
+                            'bg-gray-100 border-l-4 border-gray-400' 
+                        }`}>
+                            <div className="flex items-start space-x-3">
+                                {loadingPrediction ? (
+                                    <svg className="h-6 w-6 text-blue-600 mt-1 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                ) : predictionType === 'critical' ? 
+                                    <Bell className="h-6 w-6 text-red-600 mt-1 animate-pulse" /> :
+                                predictionType === 'success' ? 
+                                    <TrendingUp className="h-6 w-6 text-green-600 mt-1" /> :
+                                    <AlertTriangle className="h-6 w-6 text-yellow-600 mt-1" />
+                                }
+                                <div className="flex-1">
+                                    <h3 className="font-bold text-gray-800 text-lg">{predictionMessage}</h3>
+                                    <p className="text-gray-700 mt-1">{predictionDetails}</p>
+                                    
+                                    {willExceedBy20th && (
+                                        <div className="mt-3 p-4 bg-red-100 rounded-lg border-2 border-red-500 shadow-lg">
+                                            <div className="flex items-center space-x-2 mb-2">
+                                                <Bell className="h-5 w-5 text-red-600 animate-pulse" />
+                                                <p className="text-red-800 font-bold">🚨 20TH DATE OVERSPEND ALERT!</p>
+                                            </div>
+                                            <div className="space-y-1 text-sm">
+                                                <p className="text-red-800">• Projected spending by 20th: <strong>${spendingBy20th.toFixed(2)}</strong></p>
+                                                <p className="text-red-700 font-medium mt-2">💡 Reduce daily spending to ${(budget / 20).toFixed(2)}/day to stay on track!</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                    
+                                    {!willExceedBy20th && dayOfMonth <= 20 && predictionType !== 'error' && (
+                                        <div className="mt-3 p-3 bg-green-50 rounded-lg border border-green-200">
+                                            <div className="flex items-center space-x-2 mb-1">
+                                                <TrendingUp className="h-4 w-4 text-green-600" />
+                                                <p className="text-green-800 font-medium">✅ 20th Date Status: On Track!</p>
+                                            </div>
+                                            <p className="text-green-700 text-sm">
+                                                Projected spending by 20th: ${spendingBy20th.toFixed(2)} (${(budget - spendingBy20th).toFixed(2)} under budget)
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Pie Charts Section (UNCHANGED) */}
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div className="bg-white rounded-xl shadow-lg p-6">
+                                <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center">
+                                    <PieChart className="h-5 w-5 mr-2 text-blue-600" />
+                                    Spending by Category
+                                </h3>
+                                {expensesByCategory.length > 0 ? (
+                                    <ResponsiveContainer width="100%" height={300}>
+                                        <RechartsPieChart>
+                                            <Pie
+                                                data={expensesByCategory}
+                                                cx="50%" cy="50%" outerRadius={80} fill="#8884d8" dataKey="value"
+                                                labelLine={false}
+                                                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                                            >
+                                                {expensesByCategory.map((entry, index) => (
+                                                    <Cell key={`cell-${index}`} fill={entry.color} />
+                                                ))}
+                                            </Pie>
+                                            <Tooltip formatter={(value) => [`$${value.toFixed(2)}`, 'Amount']} />
+                                            <Legend />
+                                        </RechartsPieChart>
+                                    </ResponsiveContainer>
+                                ) : (
+                                    <div className="h-72 flex items-center justify-center text-gray-500">
+                                        <p>No expenses to display</p>
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="bg-white rounded-xl shadow-lg p-6">
+                                <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center">
+                                    <Target className="h-5 w-5 mr-2 text-green-600" />
+                                    Budget Overview
+                                </h3>
+                                <ResponsiveContainer width="100%" height={300}>
+                                    <RechartsPieChart>
+                                        <Pie
+                                            data={spendingAnalysis}
+                                            cx="50%" cy="50%" outerRadius={80} fill="#8884d8" dataKey="value"
+                                            labelLine={false}
+                                            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                                        >
+                                            {spendingAnalysis.map((entry, index) => (
+                                                <Cell key={`cell-${index}`} fill={entry.color} />
+                                            ))}
+                                        </Pie>
+                                        <Tooltip formatter={(value) => [`$${value.toFixed(2)}`, 'Amount']} />
+                                        <Legend />
+                                    </RechartsPieChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </div>
+
+                        {/* Category Breakdown Table (UNCHANGED) */}
+                        <div className="bg-white rounded-xl shadow-lg p-6">
+                            <h3 className="text-lg font-semibold text-gray-800 mb-4">Detailed Category Breakdown</h3>
+                            <div className="overflow-x-auto">
+                                <table className="w-full">
+                                    <thead>
+                                        <tr className="border-b border-gray-200">
+                                            <th className="text-left py-2 px-4 font-medium text-gray-600">Category</th>
+                                            <th className="text-right py-2 px-4 font-medium text-gray-600">Amount</th>
+                                            <th className="text-right py-2 px-4 font-medium text-gray-600">% of Budget</th>
+                                            <th className="text-right py-2 px-4 font-medium text-gray-600">% of Spent</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {expensesByCategory.sort((a, b) => b.value - a.value).map((category, index) => (
+                                            <tr key={category.name} className="border-b border-gray-100 hover:bg-gray-50">
+                                                <td className="py-3 px-4">
+                                                    <div className="flex items-center space-x-2">
+                                                        <div className="w-4 h-4 rounded-full" style={{ backgroundColor: category.color }}></div>
+                                                        <span className="font-medium">{category.name}</span>
+                                                    </div>
+                                                </td>
+                                                <td className="text-right py-3 px-4 font-semibold">${category.value.toFixed(2)}</td>
+                                                <td className="text-right py-3 px-4">{((category.value / budget) * 100).toFixed(1)}%</td>
+                                                <td className="text-right py-3 px-4">{((category.value / totalSpent) * 100).toFixed(1)}%</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        {/* 20th Date Progress Indicator (API-Driven) */}
+                        <div className="bg-white rounded-xl shadow-lg p-6">
+                            <div className="flex justify-between items-center mb-3">
+                                <h3 className="text-lg font-semibold text-gray-800">Progress to 20th of Month</h3>
+                                <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                                    willExceedBy20th ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'
+                                }`}>
+                                    {willExceedBy20th ? 'OVER BUDGET' : 'ON TRACK'}
+                                </span>
+                            </div>
+                            
+                            <div className="space-y-3">
+                                <div className="flex justify-between text-sm text-gray-600">
+                                    <span>Spending by 20th at current rate</span>
+                                    <span className={willExceedBy20th ? 'text-red-600 font-bold' : 'text-gray-700'}>
+                                        ${spendingBy20th.toFixed(2)}
+                                    </span>
+                                </div>
+                                
+                                <div className="w-full bg-gray-200 rounded-full h-3">
+                                    <div 
+                                        className={`h-3 rounded-full transition-all duration-300 ${
+                                            willExceedBy20th ? 'bg-red-500' : 'bg-blue-500'
+                                        }`}
+                                        style={{ width: `${Math.min((spendingBy20th / budget) * 100, 100)}%` }}
+                                    ></div>
+                                </div>
+                                
+                                <div className="flex justify-between text-xs">
+                                    <span className="text-gray-500">$0</span>
+                                    <span className="text-gray-500">Budget: ${budget.toFixed(2)}</span>
+                                </div>
+                                
+                                {willExceedBy20th && (
+                                    <div className="text-center p-2 bg-red-50 rounded-lg">
+                                        <p className="text-red-700 text-sm font-medium">
+                                            Recommended daily limit: ${(budget / 20).toFixed(2)} to stay within budget by 20th
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Budget Setting & Save Button */}
+                        <div className="bg-white rounded-xl shadow-lg p-6">
+                            <h2 className="text-xl font-semibold text-gray-800 mb-4">Monthly Budget & Data Management</h2>
+                            <div className="flex flex-wrap items-center space-x-4 space-y-2">
+                                <input
+                                    type="number"
+                                    value={budget}
+                                    onChange={(e) => setBudget(parseFloat(e.target.value) || 0)}
+                                    className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent w-48"
+                                    step="50"
+                                />
+                                <span className="text-gray-600">per month</span>
+                                
+                                <button
+                                    onClick={saveBudgetToDB}
+                                    className="bg-purple-600 text-white px-6 py-2 rounded-lg hover:bg-purple-700 transition-colors flex items-center space-x-2"
+                                >
+                                    <BookOpen className="h-5 w-5" />
+                                    <span>Save Snapshot to DB</span>
+                                </button>
+                            </div>
+                        </div>
+                    </>
+                )}
+
+                {/* Expenses Tab, Friends Tab, Insights Tab (omitted for brevity, assume they are fully included but mostly unchanged from your previous code in terms of non-API logic) */}
+                
+                {activeTab === 'expenses' && (
+                    <>
+                    {/* Add Expense Form */}
+                    <div className="bg-white rounded-xl shadow-lg p-6">
+                        <h2 className="text-xl font-semibold text-gray-800 mb-4">Add New Expense</h2>
+                        <div className="space-y-4">
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <input type="number" placeholder="Total Amount" value={newExpense.amount} onChange={(e) => setNewExpense({...newExpense, amount: e.target.value})} className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" step="0.01" />
+                                <input type="text" placeholder="Description" value={newExpense.description} onChange={(e) => setNewExpense({...newExpense, description: e.target.value})} className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+                                <select value={newExpense.category} onChange={(e) => setNewExpense({...newExpense, category: e.target.value})} className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                    {categories.map(category => (<option key={category} value={category}>{category}</option>))}
+                                </select>
+                            </div>
+                            
+                            {/* Split with Friends */}
+                            <div>
+                                <h3 className="font-medium text-gray-700 mb-2">Split with friends:</h3>
+                                <div className="flex flex-wrap gap-2">
+                                    {friends.map(friend => (
+                                        <button key={friend.id} onClick={() => toggleFriendSplit(friend.id)} className={`px-3 py-2 rounded-lg text-sm transition-colors ${newExpense.splitWith.includes(friend.id) ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}>
+                                            {friend.name}
+                                        </button>
+                                    ))}
+                                </div>
+                                {newExpense.amount && (<p className="mt-2 text-sm text-gray-600">Your share: ${calculateSplit(parseFloat(newExpense.amount) || 0, newExpense.splitWith).toFixed(2)}{newExpense.splitWith.length > 0 && ` (split among ${newExpense.splitWith.length + 1} people)`}</p>)}
+                            </div>
+                            
+                            <button onClick={addExpense} className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2">
+                                <PlusCircle className="h-5 w-5" />
+                                <span>Add Expense</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Expense List */}
+                    <div className="bg-white rounded-xl shadow-lg p-6">
+                        <h2 className="text-xl font-semibold text-gray-800 mb-4">Recent Expenses</h2>
+                        <div className="space-y-3 max-h-96 overflow-y-auto">
+                            {currentMonthExpenses.sort((a, b) => new Date(b.date) - new Date(a.date)).map((expense) => (
+                                <div key={expense.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                                    <div className="flex-1">
+                                        <div className="flex items-center space-x-3">
+                                            <div>
+                                                <p className="font-medium text-gray-800">{expense.description}</p>
+                                                <p className="text-sm text-gray-600">
+                                                    {expense.category} • {new Date(expense.date).toLocaleDateString()}
+                                                    {expense.splitWith.length > 0 && (<span className="ml-2 text-blue-600">Split with: {expense.splitWith.map(id => getFriendName(id)).join(', ')}</span>)}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center space-x-3">
+                                        <div className="text-right">
+                                            <span className="font-semibold text-red-600">Your share: ${expense.yourShare.toFixed(2)}</span>
+                                            {expense.amount !== expense.yourShare && (<p className="text-sm text-gray-500">Total: ${expense.amount.toFixed(2)}</p>)}
+                                        </div>
+                                        <button onClick={() => deleteExpense(expense.id)} className="text-red-500 hover:text-red-700 text-sm px-2 py-1 rounded">
+                                            Delete
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    </>
+                )}
+
+                {activeTab === 'friends' && (
+                    <>
+                    {/* Add Friend Form */}
+                    <div className="bg-white rounded-xl shadow-lg p-6">
+                        <h2 className="text-xl font-semibold text-gray-800 mb-4">Add New Friend</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <input type="text" placeholder="Friend's Name" value={newFriend.name} onChange={(e) => setNewFriend({...newFriend, name: e.target.value})} className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+                            <input type="email" placeholder="Email Address" value={newFriend.email} onChange={(e) => setNewFriend({...newFriend, email: e.target.value})} className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+                            <button onClick={addFriend} className="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center space-x-2">
+                                <UserPlus className="h-5 w-5" />
+                                <span>Add Friend</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Friends List */}
+                    <div className="bg-white rounded-xl shadow-lg p-6">
+                        <h2 className="text-xl font-semibold text-gray-800 mb-4">Your Friends</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {friends.map((friend) => (
+                                <div key={friend.id} className="p-4 bg-gray-50 rounded-lg">
+                                    <div className="flex items-center space-x-3">
+                                        <div className="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold">{friend.name.charAt(0).toUpperCase()}</div>
+                                        <div>
+                                            <p className="font-medium text-gray-800">{friend.name}</p>
+                                            <p className="text-sm text-gray-600">{friend.email}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    </>
+                )}
+                
+                {activeTab === 'insights' && (
+                    <>
+                    {/* Financial Tips Section */}
+                    <div className="bg-white rounded-xl shadow-lg p-6">
+                        <h2 className="text-xl font-semibold text-gray-800 mb-6 flex items-center"><BookOpen className="h-6 w-6 mr-2 text-blue-600" />Financial Resources & Expense Optimization</h2>
+                        
+                        {/* Expense Optimization Tips (UNCHANGED) */}
+                        <div className="mb-8">
+                            <h3 className="text-lg font-medium text-gray-700 mb-4">💡 Smart Expense Optimization Tips</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                                    <h4 className="font-semibold text-blue-800 mb-2">🍽️ Food & Dining</h4>
+                                    <ul className="text-sm text-blue-700 space-y-1">
+                                        <li>• Meal prep on weekends to reduce food waste</li>
+                                        <li>• Use grocery store apps for coupons and deals</li>
+                                        <li>• Limit eating out to 2-3 times per week</li>
+                                        <li>• Buy generic brands for 20-40% savings</li>
+                                    </ul>
+                                </div>
+                                
+                                <div className="p-4 bg-green-50 rounded-lg border border-green-200">
+                                    <h4 className="font-semibold text-green-800 mb-2">🏠 Utilities & Bills</h4>
+                                    <ul className="text-sm text-green-700 space-y-1">
+                                        <li>• Set thermostat 2-3°F higher/lower seasonally</li>
+                                        <li>• Switch to LED bulbs for 75% energy savings</li>
+                                        <li>• Review and negotiate subscription services</li>
+                                        <li>• Use programmable thermostat and smart power strips</li>
+                                    </ul>
+                                </div>
+                                
+                                <div className="p-4 bg-purple-50 rounded-lg border border-purple-200">
+                                    <h4 className="font-semibold text-purple-800 mb-2">🛒 Shopping & Entertainment</h4>
+                                    <ul className="text-sm text-purple-700 space-y-1">
+                                        <li>• Use 24-hour rule for non-essential purchases</li>
+                                        <li>• Compare prices using browser extensions</li>
+                                        <li>• Look for free community events and activities</li>
+                                        <li>• Consider buying quality used items</li>
+                                    </ul>
+                                </div>
+                                
+                                <div className="p-4 bg-orange-50 rounded-lg border border-orange-200">
+                                    <h4 className="font-semibold text-orange-800 mb-2">🚗 Transportation</h4>
+                                    <ul className="text-sm text-orange-700 space-y-1">
+                                        <li>• Combine errands into single trips</li>
+                                        <li>• Use public transport or carpool when possible</li>
+                                        <li>• Maintain your car regularly for better mileage</li>
+                                        <li>• Consider biking or walking for short distances</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Recommended Financial Blogs */}
+                        <div>
+                            <h3 className="text-lg font-medium text-gray-700 mb-4">📚 Recommended Financial Blogs & Resources</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                {/* blog data here (unchanged) */}
+                                {[{name: "The Simple Dollar",url: "https://www.thesimpledollar.com",description: "Practical personal finance advice and money-saving tips",focus: "Budgeting & Saving"},{name: "NerdWallet",url: "https://www.nerdwallet.com/blog",description: "Data-driven financial advice and expense optimization",focus: "Expense Tracking"},{name: "Mint Blog",url: "https://mint.intuit.com/blog",description: "Budgeting strategies and financial wellness",focus: "Budget Management"},{name: "YNAB Blog",url: "https://www.youneedabudget.com/blog",description: "You Need A Budget - Zero-based budgeting philosophy",focus: "Advanced Budgeting"},{name: "Mr. Money Mustache",url: "https://www.mrmoneymustache.com",description: "Financial independence through frugality and smart spending",focus: "Financial Independence"},{name: "Bogleheads",url: "https://www.bogleheads.org/blog",description: "Investment and long-term financial planning",focus: "Investment & Savings"}].map((blog, index) => (
+                                    <div key={index} className="
