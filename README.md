@@ -1,3 +1,4 @@
+SpendSense AI:
 🧠 Smart Budget Tracker: Full-Stack Predictive Finance App
 --
 
