@@ -91,6 +91,13 @@ The application will be accessible in your browser (typically at http://localhos
 Screenshots
 --
 
+<img width="1024" height="1024" alt="Gemini_Generated_Image_j05z7ej05z7ej05z" src="https://github.com/user-attachments/assets/b6c2e1d8-e9c5-4013-8a54-254eb5f70e37" />
+
+
+
+
+
+
 <img width="1153" height="448" alt="image" src="https://github.com/user-attachments/assets/f674a7c6-ab6c-4c73-ac54-2c2a98413d41" />
 
 
